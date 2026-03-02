@@ -51,4 +51,4 @@ pub use text_renderer::{
     show_string_with_positioning, show_string_with_positioning_mode,
 };
 pub use text_state::{TextRenderMode, TextState};
-pub use tokenizer::{Operand, Operator, tokenize};
+pub use tokenizer::{Operand, Operator, tokenize, tokenize_lenient};
