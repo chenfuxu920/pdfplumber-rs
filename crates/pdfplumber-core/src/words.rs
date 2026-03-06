@@ -179,7 +179,8 @@ impl WordExtractor {
         let x_gap = (current.bbox.x0 - last.bbox.x1).abs();
         let y_diff = (current.bbox.top - last.bbox.top).abs();
         let x_tol = Self::effective_x_tolerance(last, current, options.x_tolerance);
-        x_gap > x_tol || y_diff > options.y_tolerance
+        // ponytail: >= 语义匹配 Python pdfplumber（PR#243 cherry-pick）
+        x_gap >= x_tol || y_diff >= options.y_tolerance
     }
 
     /// Check if two vertically-adjacent chars should be split into separate words.
@@ -190,7 +191,8 @@ impl WordExtractor {
         let y_gap = (current.bbox.top - last.bbox.bottom).abs();
         let x_diff = (current.bbox.x0 - last.bbox.x0).abs();
         let y_tol = Self::effective_y_tolerance(last, current, options.y_tolerance);
-        y_gap > y_tol || x_diff > options.x_tolerance
+        // ponytail: >= 语义匹配 Python pdfplumber（PR#243 cherry-pick）
+        y_gap >= y_tol || x_diff >= options.x_tolerance
     }
 
     fn make_word(chars: &[Char]) -> Word {
