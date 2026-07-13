@@ -61,8 +61,60 @@ pub fn edge_from_line(line: &Line) -> Edge {
     }
 }
 
-/// Derive 4 Edges from a Rect (top, bottom, left, right).
+/// Maximum thickness (in points) for a rect to be treated as a thin "bar"
+/// (a line primitive) rather than a genuine cell outline.
+///
+/// CJK invoice/itinerary PDFs commonly draw table grid lines as thin filled
+/// rectangles (~0.75pt thick) instead of stroked Line operators. Treating such
+/// a bar as a cell rect produces 4 edges: two near-duplicate long edges
+/// (0.75pt apart) and two tiny stubs (0.75pt long) that get filtered by
+/// `edge_min_length`. The stubs are exactly the corner-forming segments, so
+/// deleting them breaks intersection/cell reconstruction. Detecting bars and
+/// emitting a single edge along the long axis fixes cell detection at the
+/// source. Real cells are >10pt in both dimensions, so a 2.0pt threshold
+/// cleanly separates bars (~0.75pt) from cell outlines.
+const RECT_BAR_THICKNESS: f64 = 2.0;
+
+/// Derive Edges from a Rect.
+///
+/// A thin bar (one dimension <= [`RECT_BAR_THICKNESS`]) is treated as a single
+/// line primitive: a wide-short rect becomes one horizontal edge along its
+/// midline; a tall-thin rect becomes one vertical edge along its midline. A
+/// genuine cell rect (both dimensions > the threshold) yields 4 edges
+/// (top, bottom, left, right) as before.
 pub fn edges_from_rect(rect: &Rect) -> Vec<Edge> {
+    let w = rect.x1 - rect.x0;
+    let h = rect.bottom - rect.top;
+    let min_dim = w.min(h);
+
+    if min_dim <= RECT_BAR_THICKNESS {
+        // Thin bar → single edge along the long axis (line primitive).
+        if w >= h {
+            // Horizontal bar: one horizontal edge on the midline.
+            let y = (rect.top + rect.bottom) / 2.0;
+            return vec![Edge {
+                x0: rect.x0,
+                top: y,
+                x1: rect.x1,
+                bottom: y,
+                orientation: Orientation::Horizontal,
+                source: EdgeSource::RectTop,
+            }];
+        } else {
+            // Vertical bar: one vertical edge on the midline.
+            let x = (rect.x0 + rect.x1) / 2.0;
+            return vec![Edge {
+                x0: x,
+                top: rect.top,
+                x1: x,
+                bottom: rect.bottom,
+                orientation: Orientation::Vertical,
+                source: EdgeSource::RectLeft,
+            }];
+        }
+    }
+
+    // Genuine cell rect → 4 border edges.
     vec![
         Edge {
             x0: rect.x0,
@@ -346,6 +398,43 @@ mod tests {
         assert_approx(right_edge.bottom, 70.0);
         assert_eq!(right_edge.orientation, Orientation::Vertical);
         assert_eq!(right_edge.source, EdgeSource::RectRight);
+    }
+
+    // --- Thin bar detection (CJK invoice grids drawn as filled bars) ---
+
+    #[test]
+    fn test_edges_from_rect_horizontal_bar_single_edge() {
+        // A wide-short filled rect (~0.75pt thick) is a horizontal line primitive,
+        // not a cell outline → one horizontal edge on the midline.
+        let rect = make_rect(18.0, 479.0, 577.0, 479.75);
+        let edges = edges_from_rect(&rect);
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].orientation, Orientation::Horizontal);
+        assert_approx(edges[0].x0, 18.0);
+        assert_approx(edges[0].x1, 577.0);
+        assert_approx(edges[0].top, 479.375);
+        assert_approx(edges[0].bottom, 479.375);
+    }
+
+    #[test]
+    fn test_edges_from_rect_vertical_bar_single_edge() {
+        // A tall-thin filled rect is a vertical line primitive → one vertical edge.
+        let rect = make_rect(13.0, 85.0, 13.75, 365.0);
+        let edges = edges_from_rect(&rect);
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].orientation, Orientation::Vertical);
+        assert_approx(edges[0].x0, 13.375);
+        assert_approx(edges[0].x1, 13.375);
+        assert_approx(edges[0].top, 85.0);
+        assert_approx(edges[0].bottom, 365.0);
+    }
+
+    #[test]
+    fn test_edges_from_rect_genuine_cell_still_four_edges() {
+        // A rect with both dimensions > the bar threshold stays a 4-edge cell outline.
+        let rect = make_rect(10.0, 20.0, 110.0, 70.0);
+        let edges = edges_from_rect(&rect);
+        assert_eq!(edges.len(), 4);
     }
 
     // --- Edge from Curve (chord approximation) ---
