@@ -327,7 +327,14 @@ impl PdfBackend for LopdfBackend {
             0, // page-level depth
             &mut gstate,
             &mut tstate,
-        )
+        )?;
+
+        // Process annotation shapes: Square/FreeText annotations represent
+        // visual borders that PDF viewers render automatically. Add synthetic
+        // path events so pdfplumber extracts them as Rect shapes.
+        process_annotation_rects(inner, page_dict, resources, handler, options)?;
+
+        Ok(())
     }
 
     fn extract_image_content(
@@ -2420,6 +2427,94 @@ fn extract_string_entry(
         lopdf::Object::Name(name) => Some(String::from_utf8_lossy(name).into_owned()),
         _ => None,
     }
+}
+
+/// Convert Square/FreeText annotations to synthetic path events.
+///
+/// PDF annotations like Square and FreeText represent visual borders that
+/// PDF viewers render automatically from the Rect property. The AP stream
+/// is often empty or contains only styling. This function emits synthetic
+/// path events so pdfplumber extracts these as Rect shapes.
+fn process_annotation_rects(
+    doc: &lopdf::Document,
+    page_dict: &lopdf::Dictionary,
+    _resources: &lopdf::Dictionary,
+    handler: &mut dyn ContentHandler,
+    _options: &ExtractOptions,
+) -> Result<(), BackendError> {
+    use crate::handler::PaintOp;
+    use pdfplumber_core::{PathSegment, Point};
+
+    let annots_obj = match page_dict.get(b"Annots") {
+        Ok(obj) => resolve_object(doc, obj),
+        Err(_) => return Ok(()),
+    };
+    let annots = match annots_obj.as_array() {
+        Ok(arr) => arr,
+        Err(_) => return Ok(()),
+    };
+
+    for annot_entry in annots {
+        let annot_obj = resolve_object(doc, annot_entry);
+        let annot_dict = match annot_obj.as_dict() {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+
+        let subtype = annot_dict.get(b"Subtype").ok()
+            .and_then(|s| resolve_object(doc, s).as_name_str().ok())
+            .unwrap_or("");
+
+        if subtype != "Square" && subtype != "FreeText" {
+            continue;
+        }
+
+        let rect = match annot_dict.get(b"Rect") {
+            Ok(r_obj) => {
+                let r = resolve_object(doc, r_obj);
+                match r.as_array() {
+                    Ok(arr) if arr.len() >= 4 => {
+                        let vals: Option<Vec<f64>> = arr.iter()
+                            .map(|o| object_to_f64(o).ok()).collect();
+                        match vals {
+                            Some(v) => [v[0], v[1], v[2], v[3]],
+                            None => continue,
+                        }
+                    }
+                    _ => continue,
+                }
+            }
+            Err(_) => continue,
+        };
+
+        // Emit a rectangle path matching the annotation Rect.
+        // Coordinates are in PDF bottom-left origin; the y-flip to
+        // pdfplumber's top-left system is handled by extract_shapes.
+        let x = rect[0];
+        let y = rect[1];
+        let w = rect[2] - rect[0];
+        let h = rect[3] - rect[1];
+
+        let segments = vec![
+            PathSegment::MoveTo(Point::new(x, y)),
+            PathSegment::LineTo(Point::new(x + w, y)),
+            PathSegment::LineTo(Point::new(x + w, y + h)),
+            PathSegment::LineTo(Point::new(x, y + h)),
+            PathSegment::ClosePath,
+        ];
+
+        handler.on_path_painted(crate::handler::PathEvent {
+            segments,
+            paint_op: PaintOp::Stroke,
+            line_width: 1.0,
+            stroking_color: Some(pdfplumber_core::Color::Rgb(0.0, 0.0, 0.0)),
+            non_stroking_color: None,
+            ctm: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            dash_pattern: None,
+            fill_rule: None,
+        });
+    }
+    Ok(())
 }
 
 /// Resolve a potentially indirect object reference.
