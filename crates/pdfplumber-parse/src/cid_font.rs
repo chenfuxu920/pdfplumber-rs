@@ -566,6 +566,54 @@ pub fn parse_predefined_cmap_name(name: &str) -> Option<PredefinedCMapInfo> {
     })
 }
 
+/// Returns true if `name` is a predefined CJK CMap (excluding Identity-H/V).
+///
+/// Used to decide whether to decode bytes through the appropriate encoding
+/// (GBK/Big5/UTF-16) instead of treating them as 2-byte CIDs.
+pub fn is_predefined_cjk_cmap(name: &str) -> bool {
+    parse_predefined_cmap_name(name).is_some_and(|info| !info.is_identity)
+}
+
+/// Map a predefined CJK CMap name to its encoding_rs encoding.
+/// Returns None for Identity-H/V (caller should fall back to show_string_cid).
+pub fn cjk_cmap_encoding(name: &str) -> Option<&'static encoding_rs::Encoding> {
+    // ponytail: cover the common Adobe CJK CMaps; rare ones fall back to show_string_cid
+    // GBK family (China): GBK-EUC-H/V, GBKp-EUC-H/V, GBpc-EUC-H/V, GB-EUC-H/V, GBK2K-H/V
+    if name.starts_with("GBK")
+        || name.starts_with("GBpc")
+        || name.starts_with("GB-EUC")
+        || name.starts_with("GBKp")
+        || name.starts_with("GBK2K")
+    {
+        return Some(encoding_rs::GBK);
+    }
+    // Big5 family (Taiwan): ETen-B5-H/V, ETenms-B5-H/V, B5pc-H/V, HKscs-B5-H/V
+    if name.starts_with("ETen") || name.starts_with("B5pc") || name.starts_with("HKscs") {
+        return Some(encoding_rs::BIG5);
+    }
+    // UTF-16 family: UniGB-UTF16, UniCNS-UTF16, UniJIS-UTF16, UniKS-UTF16
+    // Also UCS-2 variants (UCS-2 is a subset of UTF-16)
+    if name.contains("UTF16") || name.contains("UCS2") || name.contains("UTF32") {
+        // UTF-32 isn't supported by encoding_rs in this branch; fall back
+        if name.contains("UTF32") {
+            return None;
+        }
+        return Some(encoding_rs::UTF_16BE);
+    }
+    // EUC-JP / JIS family for Japanese (Shift_JIS for *-RKSJ variants)
+    if name.contains("RKSJ") || name.contains("SJIS") {
+        return Some(encoding_rs::SHIFT_JIS);
+    }
+    if name.contains("EUC-JP") || name == "EUC-JP-H" || name == "EUC-JP-V" {
+        return Some(encoding_rs::EUC_JP);
+    }
+    // EUC-KR for Korean
+    if name.starts_with("KSC") || name.starts_with("KSCms") {
+        return Some(encoding_rs::EUC_KR);
+    }
+    None
+}
+
 /// Detect whether a font dictionary represents a Type0 (composite/CID) font.
 pub fn is_type0_font(font_dict: &lopdf::Dictionary) -> bool {
     font_dict

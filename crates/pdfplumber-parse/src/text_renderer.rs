@@ -171,22 +171,70 @@ pub fn show_string_cid(
     chars
 }
 
+/// Decode bytes through a predefined CJK CMap encoding (GBK/Big5/UTF-16BE).
+///
+/// For Type0 fonts using predefined CJK CMaps like GBK-EUC-H without
+/// /ToUnicode, bytes are encoded in the CMap's source encoding (e.g., GBK),
+/// NOT as 2-byte CIDs. Decoding them as 2-byte CIDs produces Korean Hangul
+/// garbage (e.g., GBK "国" = B9FA → U+B9FA = 뻺). This function decodes
+/// bytes through `encoding_rs` so each RawChar's char_code is the actual
+/// Unicode codepoint, which `emit_char_events`'s `char::from_u32` fallback
+/// then resolves correctly.
+pub fn show_string_predefined_cjk(
+    text_state: &mut TextState,
+    string_bytes: &[u8],
+    get_width: &dyn Fn(u32) -> f64,
+    encoding_name: &str,
+) -> Vec<RawChar> {
+    let encoding = match crate::cid_font::cjk_cmap_encoding(encoding_name) {
+        Some(e) => e,
+        None => return show_string_cid(text_state, string_bytes, get_width),
+    };
+    // Decode the whole byte string at once via encoding_rs
+    let decoded = encoding.decode(string_bytes).0;
+
+    let mut chars = Vec::with_capacity(decoded.chars().count());
+    for c in decoded.chars() {
+        let char_code = c as u32;
+        let text_matrix = text_state.text_matrix_array();
+        let w0 = get_width(char_code);
+        let font_size = text_state.font_size;
+        let char_spacing = text_state.char_spacing;
+        let word_spacing = if char_code == 32 { text_state.word_spacing } else { 0.0 };
+        let h_scaling = text_state.h_scaling_normalized();
+        let tx = ((w0 / 1000.0) * font_size + char_spacing + word_spacing) * h_scaling;
+
+        chars.push(RawChar {
+            char_code,
+            displacement: tx,
+            text_matrix,
+        });
+        text_state.advance_text_position(tx);
+    }
+    chars
+}
+
 /// `TJ` operator with CID mode: show strings with positioning adjustments.
 ///
 /// Like [`show_string_with_positioning`] but when `cid_mode` is true, string
 /// bytes are decoded as 2-byte character codes (for CID/Type0 fonts).
+/// When `cjk_encoding` is `Some(name)`, bytes are decoded through the
+/// predefined CJK CMap encoding instead.
 pub fn show_string_with_positioning_mode(
     text_state: &mut TextState,
     elements: &[TjElement],
     get_width: &dyn Fn(u32) -> f64,
     cid_mode: bool,
+    cjk_encoding: Option<&str>,
 ) -> Vec<RawChar> {
     let mut chars = Vec::new();
 
     for element in elements {
         match element {
             TjElement::String(bytes) => {
-                let mut sub_chars = if cid_mode {
+                let mut sub_chars = if let Some(enc) = cjk_encoding {
+                    show_string_predefined_cjk(text_state, bytes, get_width, enc)
+                } else if cid_mode {
                     show_string_cid(text_state, bytes, get_width)
                 } else {
                     show_string(text_state, bytes, get_width)
