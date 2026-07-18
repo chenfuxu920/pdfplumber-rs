@@ -468,7 +468,7 @@ impl Pdf {
             .chars
             .iter()
             .map(|event| {
-                let mut ch = char_from_event(event, &default_metrics, page_height, None, None);
+                let mut ch = char_from_event(event, &default_metrics, page_height, event.stroking_color.clone(), event.non_stroking_color.clone());
                 ch.doctop += doctop_offset;
                 ch
             })

@@ -33,6 +33,10 @@ pub struct Char {
     /// Structure tag for this character (e.g., "P", "H1", "Span").
     /// Derived from the structure tree element that references this character's MCID.
     pub tag: Option<String>,
+    /// Text rendering mode (Tr operator value 0-7).
+    pub render_mode: u8,
+    /// Sequential index of the BT text object containing this character (0-based).
+    pub text_object_index: u32,
 }
 
 impl Char {
@@ -119,6 +123,8 @@ mod tests {
             char_code: 65,
             mcid: None,
             tag: None,
+            render_mode: 0,
+            text_object_index: 0,
         };
         assert_eq!(ch.text, "A");
         assert_eq!(ch.bbox.x0, 10.0);
@@ -151,6 +157,8 @@ mod tests {
             char_code: 66,
             mcid: Some(3),
             tag: Some("P".to_string()),
+            render_mode: 0,
+            text_object_index: 0,
         };
         assert_eq!(ch.stroking_color, Some(Color::Rgb(1.0, 0.0, 0.0)));
         assert_eq!(ch.non_stroking_color, Some(Color::Cmyk(0.0, 1.0, 1.0, 0.0)));
@@ -177,6 +185,8 @@ mod tests {
             char_code: 82,
             mcid: None,
             tag: None,
+            render_mode: 0,
+            text_object_index: 0,
         };
         assert!(!ch.upright);
         assert_eq!(ch.direction, TextDirection::Ttb);
@@ -246,6 +256,8 @@ mod tests {
             char_code: 65,
             mcid: None,
             tag: None,
+            render_mode: 0,
+            text_object_index: 0,
         }
     }
 

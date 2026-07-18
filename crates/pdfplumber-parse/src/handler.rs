@@ -46,6 +46,14 @@ pub struct CharEvent {
     pub h_scaling: f64,
     /// Text rise value (Ts operator) for superscript/subscript.
     pub rise: f64,
+    /// Non-stroking (fill) color at the time of rendering.
+    pub non_stroking_color: Option<Color>,
+    /// Stroking (outline) color at the time of rendering.
+    pub stroking_color: Option<Color>,
+    /// Text rendering mode (Tr operator value 0-7).
+    pub render_mode: u8,
+    /// Sequential index of the BT text object containing this character (0-based).
+    pub text_object_index: u32,
 }
 
 /// Information about a painted path.
@@ -197,6 +205,10 @@ mod tests {
             word_spacing: 0.0,
             h_scaling: 1.0,
             rise: 0.0,
+            non_stroking_color: None,
+            stroking_color: None,
+            render_mode: 0,
+            text_object_index: 0,
         }
     }
 
