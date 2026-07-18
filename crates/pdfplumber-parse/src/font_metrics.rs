@@ -36,6 +36,10 @@ pub struct FontMetrics {
     descent: f64,
     /// Font bounding box [llx, lly, urx, ury] in glyph space units.
     font_bbox: Option<[f64; 4]>,
+    /// Font descriptor /Flags bitmask (PDF spec Table 123).
+    pub flags: Option<u32>,
+    /// Font descriptor /StemV (vertical stem width in 1/1000 units).
+    pub stem_v: Option<f64>,
 }
 
 impl FontMetrics {
@@ -48,6 +52,8 @@ impl FontMetrics {
         ascent: f64,
         descent: f64,
         font_bbox: Option<[f64; 4]>,
+        flags: Option<u32>,
+        stem_v: Option<f64>,
     ) -> Self {
         Self {
             widths,
@@ -57,6 +63,8 @@ impl FontMetrics {
             ascent,
             descent,
             font_bbox,
+            flags,
+            stem_v,
         }
     }
 
@@ -70,6 +78,8 @@ impl FontMetrics {
             ascent: DEFAULT_ASCENT,
             descent: DEFAULT_DESCENT,
             font_bbox: None,
+            flags: None,
+            stem_v: None,
         }
     }
 
@@ -169,6 +179,8 @@ pub fn extract_font_metrics(
         desc_info.ascent,
         desc_info.descent,
         desc_info.font_bbox,
+        desc_info.flags,
+        desc_info.stem_v,
     ))
 }
 
@@ -178,6 +190,8 @@ struct FontDescriptorInfo {
     descent: f64,
     font_bbox: Option<[f64; 4]>,
     missing_width: f64,
+    flags: Option<u32>,
+    stem_v: Option<f64>,
 }
 
 /// Parse /FontDescriptor dictionary for ascent, descent, bbox, and missing width.
@@ -197,6 +211,8 @@ fn parse_font_descriptor(
             descent: DEFAULT_DESCENT,
             font_bbox: None,
             missing_width: DEFAULT_WIDTH,
+            flags: None,
+            stem_v: None,
         });
     };
 
@@ -238,11 +254,25 @@ fn parse_font_descriptor(
             }
         });
 
+    let flags = desc
+        .get(b"Flags")
+        .ok()
+        .and_then(|v| v.as_i64().ok())
+        .map(|v| v as u32);
+
+    let stem_v = desc
+        .get(b"StemV")
+        .ok()
+        .and_then(|v| v.as_i64().ok())
+        .map(|v| v as f64);
+
     Ok(FontDescriptorInfo {
         ascent,
         descent,
         font_bbox,
         missing_width,
+        flags,
+        stem_v,
     })
 }
 
@@ -280,6 +310,8 @@ mod tests {
             DEFAULT_ASCENT,
             DEFAULT_DESCENT,
             None,
+            None,
+            None,
         );
         assert_eq!(metrics.get_width(65), 250.0); // 'A'
         assert_eq!(metrics.get_width(66), 500.0); // 'B'
@@ -295,6 +327,8 @@ mod tests {
             300.0, // missing width
             DEFAULT_ASCENT,
             DEFAULT_DESCENT,
+            None,
+            None,
             None,
         );
         // Below first_char
@@ -313,6 +347,8 @@ mod tests {
             DEFAULT_ASCENT,
             DEFAULT_DESCENT,
             None,
+            None,
+            None,
         );
         assert_eq!(metrics.get_width(32), 600.0);
         assert_eq!(metrics.get_width(65), 0.0); // out of range
@@ -320,7 +356,7 @@ mod tests {
 
     #[test]
     fn width_lookup_empty_widths_returns_missing_width() {
-        let metrics = FontMetrics::new(vec![], 0, 0, 500.0, DEFAULT_ASCENT, DEFAULT_DESCENT, None);
+        let metrics = FontMetrics::new(vec![], 0, 0, 500.0, DEFAULT_ASCENT, DEFAULT_DESCENT, None, None, None);
         assert_eq!(metrics.get_width(0), 500.0);
         assert_eq!(metrics.get_width(65), 500.0);
     }
@@ -336,6 +372,8 @@ mod tests {
             DEFAULT_ASCENT,
             DEFAULT_DESCENT,
             None,
+            None,
+            None,
         );
         assert_eq!(metrics.get_width(65), 250.0);
         assert_eq!(metrics.get_width(66), 500.0);
@@ -344,7 +382,7 @@ mod tests {
 
     #[test]
     fn ascent_and_descent() {
-        let metrics = FontMetrics::new(vec![], 0, 0, 0.0, 800.0, -200.0, None);
+        let metrics = FontMetrics::new(vec![], 0, 0, 0.0, 800.0, -200.0, None, None, None);
         assert_eq!(metrics.ascent(), 800.0);
         assert_eq!(metrics.descent(), -200.0);
     }
@@ -352,13 +390,13 @@ mod tests {
     #[test]
     fn font_bbox_some() {
         let bbox = [-100.0, -250.0, 1100.0, 900.0];
-        let metrics = FontMetrics::new(vec![], 0, 0, 0.0, 0.0, 0.0, Some(bbox));
+        let metrics = FontMetrics::new(vec![], 0, 0, 0.0, 0.0, 0.0, Some(bbox), None, None);
         assert_eq!(metrics.font_bbox(), Some([-100.0, -250.0, 1100.0, 900.0]));
     }
 
     #[test]
     fn font_bbox_none() {
-        let metrics = FontMetrics::new(vec![], 0, 0, 0.0, 0.0, 0.0, None);
+        let metrics = FontMetrics::new(vec![], 0, 0, 0.0, 0.0, 0.0, None, None, None);
         assert_eq!(metrics.font_bbox(), None);
     }
 
@@ -377,14 +415,14 @@ mod tests {
 
     #[test]
     fn first_char_last_char_accessors() {
-        let metrics = FontMetrics::new(vec![500.0], 32, 32, 0.0, 0.0, 0.0, None);
+        let metrics = FontMetrics::new(vec![500.0], 32, 32, 0.0, 0.0, 0.0, None, None, None);
         assert_eq!(metrics.first_char(), 32);
         assert_eq!(metrics.last_char(), 32);
     }
 
     #[test]
     fn width_lookup_large_char_code() {
-        let metrics = FontMetrics::new(vec![600.0], 0xFFFF, 0xFFFF, 0.0, 0.0, 0.0, None);
+        let metrics = FontMetrics::new(vec![600.0], 0xFFFF, 0xFFFF, 0.0, 0.0, 0.0, None, None, None);
         assert_eq!(metrics.get_width(0xFFFF), 600.0);
         assert_eq!(metrics.get_width(0xFFFE), 0.0);
     }
@@ -628,6 +666,8 @@ mod tests {
             278.0,
             718.0,
             -207.0,
+            None,
+            None,
             None,
         );
         let get_width: &dyn Fn(u32) -> f64 = &|code| metrics.get_width(code);

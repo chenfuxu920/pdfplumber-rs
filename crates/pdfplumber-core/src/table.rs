@@ -2866,6 +2866,8 @@ mod tests {
             char_code: 0,
             mcid: None,
             tag: None,
+            render_mode: 0,
+            text_object_index: 0,
         }
     }
 
@@ -3048,6 +3050,13 @@ mod tests {
             doctop: top,
             direction: crate::text::TextDirection::Ltr,
             chars: vec![],
+            fontname: String::new(),
+            size: 0.0,
+            non_stroking_color: None,
+            render_mode: 0,
+            text_object_index: 0,
+            font_flags: None,
+            stem_v: None,
         }
     }
 

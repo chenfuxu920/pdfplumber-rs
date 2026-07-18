@@ -25,6 +25,8 @@ fn char(text: &str, x0: f64, top: f64, x1: f64, bottom: f64) -> Char {
         char_code: 0,
         mcid: None,
         tag: None,
+        render_mode: 0,
+        text_object_index: 0,
     }
 }
 

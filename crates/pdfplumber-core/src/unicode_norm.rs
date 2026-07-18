@@ -84,6 +84,8 @@ mod tests {
             char_code: 0,
             mcid: None,
             tag: None,
+            render_mode: 0,
+            text_object_index: 0,
         }
     }
 

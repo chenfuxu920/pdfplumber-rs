@@ -118,6 +118,8 @@ pub fn char_from_event(
         char_code: event.char_code,
         mcid: None,
         tag: None,
+        render_mode: event.render_mode,
+        text_object_index: event.text_object_index,
     }
 }
 
@@ -146,6 +148,10 @@ mod tests {
             word_spacing: 0.0,
             h_scaling: 1.0,
             rise: 0.0,
+            non_stroking_color: None,
+            stroking_color: None,
+            render_mode: 0,
+            text_object_index: 0,
         }
     }
 
@@ -158,6 +164,8 @@ mod tests {
             600.0,  // missing width
             750.0,  // ascent
             -250.0, // descent
+            None,
+            None,
             None,
         )
     }
@@ -331,7 +339,7 @@ mod tests {
             word_spacing: 3.0,
             ..default_event()
         };
-        let metrics = FontMetrics::new(vec![250.0], 32, 32, 600.0, 750.0, -250.0, None);
+        let metrics = FontMetrics::new(vec![250.0], 32, 32, 600.0, 750.0, -250.0, None, None, None);
 
         let ch = char_from_event(&event, &metrics, PAGE_HEIGHT, None, None);
 
@@ -596,7 +604,7 @@ mod tests {
             word_spacing: 2.0,
             ..default_event()
         };
-        let metrics = FontMetrics::new(vec![250.0], 32, 32, 600.0, 750.0, -250.0, None);
+        let metrics = FontMetrics::new(vec![250.0], 32, 32, 600.0, 750.0, -250.0, None, None, None);
 
         let ch = char_from_event(&event, &metrics, PAGE_HEIGHT, None, None);
 

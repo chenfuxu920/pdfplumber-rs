@@ -209,7 +209,10 @@ pub(crate) fn interpret_content_stream(
             }
 
             // --- Text state operators ---
-            "BT" => tstate.begin_text(),
+            "BT" => {
+                tstate.begin_text();
+                tstate.inc_text_object_index();
+            }
             "ET" => tstate.end_text(),
             "Tf" => {
                 if op.operands.len() >= 2 {
@@ -587,6 +590,8 @@ fn load_font_if_needed(
                         cm.ascent(),
                         cm.descent(),
                         cm.font_bbox(),
+                        cm.flags,
+                        cm.stem_v,
                     )
                 } else {
                     if options.collect_warnings {
@@ -917,6 +922,8 @@ fn emit_char_events(
             None => 600.0,
         };
 
+        let gs = gstate.graphics_state();
+
         handler.on_char(CharEvent {
             char_code: rc.char_code,
             unicode,
@@ -929,6 +936,10 @@ fn emit_char_events(
             word_spacing: tstate.word_spacing,
             h_scaling: tstate.h_scaling_normalized(),
             rise: tstate.rise,
+            non_stroking_color: Some(gs.fill_color.clone()),
+            stroking_color: Some(gs.stroke_color.clone()),
+            render_mode: tstate.render_mode as u8,
+            text_object_index: tstate.text_object_index(),
         });
     }
 }

@@ -78,6 +78,8 @@ pub struct TextState {
     text_matrix: Ctm,
     /// The text line matrix (set by BT, Td, TD, T*, Tm — records the start of each line).
     line_matrix: Ctm,
+    /// Sequential index of the current BT text object (0-based), incremented on each BT.
+    text_object_index: u32,
 }
 
 impl Default for TextState {
@@ -101,6 +103,7 @@ impl TextState {
             in_text_object: false,
             text_matrix: Ctm::identity(),
             line_matrix: Ctm::identity(),
+            text_object_index: 0,
         }
     }
 
@@ -156,6 +159,16 @@ impl TextState {
     /// become undefined (but we keep them for potential inspection).
     pub fn end_text(&mut self) {
         self.in_text_object = false;
+    }
+
+    /// Get the current text object index.
+    pub fn text_object_index(&self) -> u32 {
+        self.text_object_index
+    }
+
+    /// Increment the text object index (called at each BT operator).
+    pub fn inc_text_object_index(&mut self) {
+        self.text_object_index += 1;
     }
 
     // --- Tf operator ---

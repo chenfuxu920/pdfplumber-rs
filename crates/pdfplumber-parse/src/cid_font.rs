@@ -106,6 +106,10 @@ pub struct CidFontMetrics {
     cid_to_gid: CidToGidMap,
     /// CID system information.
     system_info: Option<CidSystemInfo>,
+    /// Font descriptor /Flags bitmask (PDF spec Table 123).
+    pub flags: Option<u32>,
+    /// Font descriptor /StemV (vertical stem width in 1/1000 units).
+    pub stem_v: Option<f64>,
 }
 
 impl CidFontMetrics {
@@ -120,6 +124,8 @@ impl CidFontMetrics {
         font_type: CidFontType,
         cid_to_gid: CidToGidMap,
         system_info: Option<CidSystemInfo>,
+        flags: Option<u32>,
+        stem_v: Option<f64>,
     ) -> Self {
         Self {
             widths,
@@ -130,6 +136,8 @@ impl CidFontMetrics {
             font_type,
             cid_to_gid,
             system_info,
+            flags,
+            stem_v,
         }
     }
 
@@ -144,6 +152,8 @@ impl CidFontMetrics {
             font_type: CidFontType::Type2,
             cid_to_gid: CidToGidMap::Identity,
             system_info: None,
+            flags: None,
+            stem_v: None,
         }
     }
 
@@ -288,8 +298,9 @@ pub fn extract_cid_font_metrics(
     // Parse /CIDSystemInfo
     let system_info = parse_cid_system_info(doc, cid_font_dict);
 
-    // Parse /FontDescriptor for ascent, descent, bbox
-    let (ascent, descent, font_bbox) = parse_cid_font_descriptor(doc, cid_font_dict);
+    // Parse /FontDescriptor for ascent, descent, bbox, flags, stem_v
+    let (ascent, descent, font_bbox, flags, stem_v) =
+        parse_cid_font_descriptor(doc, cid_font_dict);
 
     Ok(CidFontMetrics::new(
         widths,
@@ -300,6 +311,8 @@ pub fn extract_cid_font_metrics(
         font_type,
         cid_to_gid,
         system_info,
+        flags,
+        stem_v,
     ))
 }
 
@@ -364,11 +377,12 @@ fn parse_cid_system_info(doc: &lopdf::Document, dict: &lopdf::Dictionary) -> Opt
     })
 }
 
-/// Parse /FontDescriptor from a CIDFont dictionary for ascent, descent, bbox.
+/// Parse /FontDescriptor from a CIDFont dictionary for ascent, descent, bbox, flags, stem_v.
+#[allow(clippy::type_complexity)]
 fn parse_cid_font_descriptor(
     doc: &lopdf::Document,
     dict: &lopdf::Dictionary,
-) -> (f64, f64, Option<[f64; 4]>) {
+) -> (f64, f64, Option<[f64; 4]>, Option<u32>, Option<f64>) {
     let desc = match dict
         .get(b"FontDescriptor")
         .ok()
@@ -376,7 +390,7 @@ fn parse_cid_font_descriptor(
         .and_then(|o| o.as_dict().ok())
     {
         Some(d) => d,
-        None => return (DEFAULT_CID_ASCENT, DEFAULT_CID_DESCENT, None),
+        None => return (DEFAULT_CID_ASCENT, DEFAULT_CID_DESCENT, None, None, None),
     };
 
     let ascent = desc
@@ -411,7 +425,19 @@ fn parse_cid_font_descriptor(
             }
         });
 
-    (ascent, descent, font_bbox)
+    let flags = desc
+        .get(b"Flags")
+        .ok()
+        .and_then(|v| v.as_i64().ok())
+        .map(|v| v as u32);
+
+    let stem_v = desc
+        .get(b"StemV")
+        .ok()
+        .and_then(|v| v.as_i64().ok())
+        .map(|v| v as f64);
+
+    (ascent, descent, font_bbox, flags, stem_v)
 }
 
 /// Resolve an indirect reference to the actual object.
@@ -809,6 +835,8 @@ mod tests {
             CidFontType::Type2,
             CidToGidMap::Identity,
             None,
+            None,
+            None,
         );
 
         assert_eq!(metrics.get_width(1), 500.0);
@@ -827,6 +855,8 @@ mod tests {
             CidFontType::Type2,
             CidToGidMap::Identity,
             None,
+            None,
+            None,
         );
 
         assert_eq!(metrics.get_width(0), 1000.0);
@@ -843,6 +873,8 @@ mod tests {
             None,
             CidFontType::Type0,
             CidToGidMap::Identity,
+            None,
+            None,
             None,
         );
 
@@ -866,6 +898,8 @@ mod tests {
             CidFontType::Type0,
             CidToGidMap::Identity,
             Some(info),
+            None,
+            None,
         );
 
         assert_eq!(metrics.ascent(), 880.0);
@@ -887,6 +921,8 @@ mod tests {
             None,
             CidFontType::Type2,
             CidToGidMap::Explicit(table),
+            None,
+            None,
             None,
         );
 

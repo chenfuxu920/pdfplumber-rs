@@ -1,4 +1,5 @@
 use crate::geometry::BBox;
+use crate::painting::Color;
 use crate::text::{Char, TextDirection, is_cjk_text};
 
 /// Options for word extraction, matching pdfplumber defaults.
@@ -42,6 +43,20 @@ pub struct Word {
     pub direction: TextDirection,
     /// The characters that make up this word.
     pub chars: Vec<Char>,
+    /// Font name (from first character).
+    pub fontname: String,
+    /// Font size in points (from first character).
+    pub size: f64,
+    /// Non-stroking (fill) color (from first character).
+    pub non_stroking_color: Option<Color>,
+    /// Text rendering mode (from first character).
+    pub render_mode: u8,
+    /// Text object index (from first character).
+    pub text_object_index: u32,
+    /// Font descriptor /Flags bitmask (requires font metadata lookup, None if unavailable).
+    pub font_flags: Option<u32>,
+    /// Font descriptor /StemV (requires font metadata lookup, None if unavailable).
+    pub stem_v: Option<f64>,
 }
 
 /// Extracts words from a sequence of characters based on spatial proximity.
@@ -210,6 +225,14 @@ impl WordExtractor {
             doctop,
             direction,
             chars: chars.to_vec(),
+            fontname: chars[0].fontname.clone(),
+            size: chars[0].size,
+            non_stroking_color: chars[0].non_stroking_color.clone(),
+            render_mode: chars[0].render_mode,
+            text_object_index: chars[0].text_object_index,
+            // ponytail: font_flags/stem_v not accessible from chars alone, set None
+            font_flags: None,
+            stem_v: None,
         }
     }
 }
@@ -233,6 +256,8 @@ mod tests {
             char_code: 0,
             mcid: None,
             tag: None,
+            render_mode: 0,
+            text_object_index: 0,
         }
     }
 
@@ -579,6 +604,8 @@ mod tests {
             char_code: 0,
             mcid: None,
             tag: None,
+            render_mode: 0,
+            text_object_index: 0,
         }
     }
 
@@ -774,6 +801,8 @@ mod tests {
                 char_code: 32,
                 mcid: None,
                 tag: None,
+                render_mode: 0,
+                text_object_index: 0,
             },
             make_cjk_char("国", 25.0, 100.0, 12.0, 12.0),
         ];

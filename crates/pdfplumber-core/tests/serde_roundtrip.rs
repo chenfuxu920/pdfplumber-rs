@@ -68,6 +68,8 @@ fn test_serde_char() {
         char_code: 65,
         mcid: None,
         tag: None,
+        render_mode: 0,
+        text_object_index: 0,
     };
     roundtrip(&ch);
 }
@@ -88,6 +90,8 @@ fn test_serde_char_no_colors() {
         char_code: 90,
         mcid: None,
         tag: None,
+        render_mode: 0,
+        text_object_index: 0,
     };
     roundtrip(&ch);
 }
@@ -258,7 +262,16 @@ fn test_serde_word() {
             char_code: 72,
             mcid: None,
             tag: None,
+            render_mode: 0,
+            text_object_index: 0,
         }],
+        fontname: "Helvetica".to_string(),
+        size: 12.0,
+        non_stroking_color: Some(Color::Gray(0.0)),
+        render_mode: 0,
+        text_object_index: 0,
+        font_flags: None,
+        stem_v: None,
     };
     roundtrip(&word);
 }
@@ -389,6 +402,8 @@ fn test_char_json_fields() {
         char_code: 88,
         mcid: None,
         tag: None,
+        render_mode: 0,
+        text_object_index: 0,
     };
     let json: serde_json::Value = serde_json::to_value(&ch).unwrap();
     assert_eq!(json["text"], "X");
