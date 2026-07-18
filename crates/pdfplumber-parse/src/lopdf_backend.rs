@@ -991,7 +991,11 @@ fn fix_references_in_object(
 
 /// Get the content stream bytes from a page dictionary.
 ///
-/// Handles both single stream references and arrays of stream references.
+/// Handles three /Contents shapes permitted by ISO 32000-1 §7.8.2:
+///   - `stream` (direct or indirect reference → Stream)
+///   - `[stream ...]` (array of stream references)
+///   - indirect reference that resolves to an array (e.g. `gp-template` 全电发票
+///     writes `/Contents 28 0 R` where obj 28 is `[29 0 R]`)
 fn get_page_content_bytes(
     doc: &lopdf::Document,
     page_dict: &lopdf::Dictionary,
@@ -1006,34 +1010,64 @@ fn get_page_content_bytes(
             let obj = doc
                 .get_object(*id)
                 .map_err(|e| BackendError::Parse(format!("failed to resolve /Contents: {e}")))?;
-            let stream = obj
-                .as_stream()
-                .map_err(|e| BackendError::Parse(format!("/Contents is not a stream: {e}")))?;
-            decode_content_stream(stream)
-        }
-        lopdf::Object::Array(arr) => {
-            let mut content = Vec::new();
-            for item in arr {
-                let id = item.as_reference().map_err(|e| {
-                    BackendError::Parse(format!("/Contents array item is not a reference: {e}"))
-                })?;
-                let obj = doc.get_object(id).map_err(|e| {
-                    BackendError::Parse(format!("failed to resolve /Contents stream: {e}"))
-                })?;
-                let stream = obj.as_stream().map_err(|e| {
-                    BackendError::Parse(format!("/Contents array item is not a stream: {e}"))
-                })?;
-                let bytes = decode_content_stream(stream)?;
-                if !content.is_empty() {
-                    content.push(b' ');
-                }
-                content.extend_from_slice(&bytes);
+            // ponytail: resolve once — handles the gp-template `[ref]`-via-indirect
+            // pattern. Reference-to-reference chains are not followed (no real PDF
+            // triggers it); if one shows up, add a depth-limited loop here.
+            match obj {
+                lopdf::Object::Stream(stream) => decode_content_stream(stream),
+                lopdf::Object::Array(arr) => decode_contents_array(doc, arr),
+                other => Err(BackendError::Parse(format!(
+                    "/Contents reference resolved to {} (expected Stream or Array)",
+                    obj_name(other)
+                ))),
             }
-            Ok(content)
         }
-        _ => Err(BackendError::Parse(
-            "/Contents is not a reference or array".to_string(),
-        )),
+        lopdf::Object::Array(arr) => decode_contents_array(doc, arr),
+        other => Err(BackendError::Parse(format!(
+            "/Contents is not a reference or array (got {})",
+            obj_name(other)
+        ))),
+    }
+}
+
+/// Concatenate the bytes of every stream referenced by a `/Contents` array.
+fn decode_contents_array(
+    doc: &lopdf::Document,
+    arr: &[lopdf::Object],
+) -> Result<Vec<u8>, BackendError> {
+    let mut content = Vec::new();
+    for item in arr {
+        let id = item.as_reference().map_err(|e| {
+            BackendError::Parse(format!("/Contents array item is not a reference: {e}"))
+        })?;
+        let obj = doc.get_object(id).map_err(|e| {
+            BackendError::Parse(format!("failed to resolve /Contents stream: {e}"))
+        })?;
+        let stream = obj
+            .as_stream()
+            .map_err(|e| BackendError::Parse(format!("/Contents array item is not a stream: {e}")))?;
+        let bytes = decode_content_stream(stream)?;
+        if !content.is_empty() {
+            content.push(b' ');
+        }
+        content.extend_from_slice(&bytes);
+    }
+    Ok(content)
+}
+
+/// Short tag name for an `Object` variant, used in error messages.
+fn obj_name(obj: &lopdf::Object) -> &'static str {
+    match obj {
+        lopdf::Object::Null => "Null",
+        lopdf::Object::Boolean(_) => "Boolean",
+        lopdf::Object::Integer(_) => "Integer",
+        lopdf::Object::Real(_) => "Real",
+        lopdf::Object::Name(_) => "Name",
+        lopdf::Object::String(_, _) => "String",
+        lopdf::Object::Array(_) => "Array",
+        lopdf::Object::Dictionary(_) => "Dictionary",
+        lopdf::Object::Stream(_) => "Stream",
+        lopdf::Object::Reference(_) => "Reference",
     }
 }
 
