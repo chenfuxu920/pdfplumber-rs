@@ -448,10 +448,15 @@ pub fn edges_to_intersections(
 
 /// Construct rectangular cells from a grid of intersection points.
 ///
-/// Groups intersection points into a grid of unique y-rows and x-columns (sorted).
-/// For each pair of adjacent rows and adjacent columns, checks if all 4 corner
-/// intersections exist. If so, creates a [`Cell`] with the corresponding bounding box.
-/// Missing corners are skipped gracefully.
+/// Groups intersection points into unique y-rows and x-columns (sorted). For
+/// each pair of adjacent rows, collects the x-positions where a vertical edge
+/// crosses BOTH row boundaries (i.e. corners exist at `(x, top)` and
+/// `(x, bottom)`), then forms cells between adjacent such x-positions.
+///
+/// Using a per-row x-list (instead of the global unique-x list) avoids
+/// "phantom" x-coordinates from partial edges in other rows splitting and
+/// breaking wide cells whose 4 corners all exist but span a non-adjacent
+/// global x pair — common in CJK invoice grids with partial verticals.
 pub fn intersections_to_cells(intersections: &[Intersection]) -> Vec<Cell> {
     if intersections.is_empty() {
         return Vec::new();
@@ -482,24 +487,27 @@ pub fn intersections_to_cells(intersections: &[Intersection]) -> Vec<Cell> {
 
     let mut cells = Vec::new();
 
-    // For each pair of adjacent rows and columns, check all 4 corners
+    // For each pair of adjacent rows, form cells between adjacent x-positions
+    // whose vertical edges span both row boundaries.
     for yi in 0..ys.len().saturating_sub(1) {
-        for xi in 0..xs.len().saturating_sub(1) {
-            let x0 = xs[xi];
-            let x1 = xs[xi + 1];
-            let top = ys[yi];
-            let bottom = ys[yi + 1];
+        let top = ys[yi];
+        let bottom = ys[yi + 1];
 
-            if has_point(x0, top)
-                && has_point(x1, top)
-                && has_point(x0, bottom)
-                && has_point(x1, bottom)
-            {
-                cells.push(Cell {
-                    bbox: BBox::new(x0, top, x1, bottom),
-                    text: None,
-                });
-            }
+        // x-positions where corners exist at BOTH top and bottom of this row.
+        let row_xs: Vec<f64> = xs
+            .iter()
+            .copied()
+            .filter(|&x| has_point(x, top) && has_point(x, bottom))
+            .collect();
+
+        for xi in 0..row_xs.len().saturating_sub(1) {
+            let x0 = row_xs[xi];
+            let x1 = row_xs[xi + 1];
+            // All 4 corners exist by construction (both x have corners at top & bottom).
+            cells.push(Cell {
+                bbox: BBox::new(x0, top, x1, bottom),
+                text: None,
+            });
         }
     }
 
@@ -2305,11 +2313,11 @@ mod tests {
         // (0,0)  (50,0)  (100,0)
         // (0,30) ---X--- (100,30)
         // (0,60) (50,60) (100,60)
-        // Without (50,30): top-left and bottom-left cells lose a corner.
-        // Only (0,0)-(100,0)-(0,30)-(100,30) is complete → 1 big cell top row
-        // And (0,30)-(100,30)-(0,60)-(100,60) is complete → 1 big cell bottom row
-        // Plus (0,60)-(50,60) and (50,60)-(100,60) don't have top corners at 50,30
-        // So we get: cells that have all 4 corners present
+        // Without (50,30): the per-row cell formation collects x-positions whose vertical
+        // edges cross BOTH row boundaries. x=50 has no corner at y=30, so it is excluded
+        // from both rows. Each row then forms one wide cell spanning (0..100):
+        //   top row:    (0,0)-(100,30)
+        //   bottom row: (0,30)-(100,60)
         let intersections = vec![
             make_intersection(0.0, 0.0),
             make_intersection(50.0, 0.0),
@@ -2322,24 +2330,17 @@ mod tests {
             make_intersection(100.0, 60.0),
         ];
         let cells = intersections_to_cells(&intersections);
-        // Top row: (0,0)-(50,0)-(0,30)-(50,30)? No, (50,30) missing → skip
-        //          (50,0)-(100,0)-(50,30)-(100,30)? No, (50,30) missing → skip
-        //          (0,0)-(100,0)-(0,30)-(100,30)? The grid only checks adjacent columns.
-        //            xs = [0, 50, 100], adjacent pairs are (0,50) and (50,100)
-        //            So this cell would not be formed from the adjacent pair logic.
-        // Bottom row: (0,30)-(50,30)? (50,30) missing → skip
-        //             (50,30)-(100,30)? (50,30) missing → skip
-        // Bottom row with y=30..60: (0,30)-(50,30) missing → skip; (50,30)-(100,30) missing → skip
-        //   But (0,30)-(100,30)-(0,60)-(100,60) is NOT adjacent columns
-        // Result: 0 cells (because the missing center breaks all adjacent cell formations)
-        // Wait - let me reconsider:
-        // xs = [0, 50, 100], ys = [0, 30, 60]
-        // (0,50) x (0,30): corners (0,0),(50,0),(0,30),(50,30) → (50,30) missing → skip
-        // (50,100) x (0,30): corners (50,0),(100,0),(50,30),(100,30) → (50,30) missing → skip
-        // (0,50) x (30,60): corners (0,30),(50,30),(0,60),(50,60) → (50,30) missing → skip
-        // (50,100) x (30,60): corners (50,30),(100,30),(50,60),(100,60) → (50,30) missing → skip
-        // All cells need (50,30) which is missing → 0 cells
-        assert_eq!(cells.len(), 0);
+        assert_eq!(cells.len(), 2);
+        // Top row wide cell
+        assert_approx(cells[0].bbox.x0, 0.0);
+        assert_approx(cells[0].bbox.top, 0.0);
+        assert_approx(cells[0].bbox.x1, 100.0);
+        assert_approx(cells[0].bbox.bottom, 30.0);
+        // Bottom row wide cell
+        assert_approx(cells[1].bbox.x0, 0.0);
+        assert_approx(cells[1].bbox.top, 30.0);
+        assert_approx(cells[1].bbox.x1, 100.0);
+        assert_approx(cells[1].bbox.bottom, 60.0);
     }
 
     #[test]

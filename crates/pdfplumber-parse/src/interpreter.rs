@@ -7,8 +7,8 @@
 use std::collections::HashMap;
 
 use crate::cid_font::{
-    CidFontMetrics, extract_cid_font_metrics, get_descendant_font, get_type0_encoding,
-    is_type0_font, parse_predefined_cmap_name, strip_subset_prefix,
+    cjk_cmap_encoding, CidFontMetrics, extract_cid_font_metrics, get_descendant_font,
+    get_type0_encoding, is_type0_font, parse_predefined_cmap_name, strip_subset_prefix,
 };
 use crate::cmap::CMap;
 use crate::color_space::resolve_color_space_name;
@@ -18,7 +18,8 @@ use crate::handler::{CharEvent, ContentHandler, ImageEvent, PaintOp, PathEvent};
 use crate::interpreter_state::InterpreterState;
 use crate::lopdf_backend::object_to_f64;
 use crate::text_renderer::{
-    TjElement, show_string, show_string_cid, show_string_with_positioning_mode,
+    TjElement, show_string, show_string_cid, show_string_predefined_cjk,
+    show_string_with_positioning_mode,
 };
 use crate::text_state::TextState;
 use crate::tokenizer::{Operand, Operator, tokenize_lenient};
@@ -42,6 +43,10 @@ struct CachedFont {
     writing_mode: u8,
     /// Font encoding from the /Encoding entry (for simple fonts).
     encoding: Option<FontEncoding>,
+    /// Encoding name from the Type0 font dictionary's /Encoding entry
+    /// (e.g., "GBK-EUC-H", "Identity-H"). Used for predefined CJK CMap
+    /// detection to route bytes through encoding_rs instead of 2-byte CID.
+    encoding_name: Option<String>,
 }
 
 /// Interpret a content stream and emit events to the handler.
@@ -569,11 +574,12 @@ fn load_font_if_needed(
         font_obj.as_dict().ok()
     })();
 
-    let (metrics, cmap, base_name, cid_metrics, is_cid_font, writing_mode, encoding) =
+    let (metrics, cmap, base_name, cid_metrics, is_cid_font, writing_mode, encoding, encoding_name) =
         if let Some(fd) = font_dict {
             if is_type0_font(fd) {
                 // Type0 (composite/CID) font
                 let (cid_met, wm) = load_cid_font(doc, fd);
+                let encoding_name = get_type0_encoding(fd);
                 let metrics = if let Some(ref cm) = cid_met {
                     // Create a FontMetrics from CID font data for backward compat
                     FontMetrics::new(
@@ -608,7 +614,7 @@ fn load_font_if_needed(
                     .unwrap_or(font_name);
                 let base_name = strip_subset_prefix(raw_base_name).to_string();
 
-                (metrics, cmap, base_name, cid_met, true, wm, None)
+                (metrics, cmap, base_name, cid_met, true, wm, None, encoding_name)
             } else {
                 // Simple font
                 let metrics = match extract_font_metrics(doc, fd) {
@@ -633,7 +639,7 @@ fn load_font_if_needed(
                     .unwrap_or(font_name);
                 let base_name = strip_subset_prefix(raw_base_name).to_string();
 
-                (metrics, cmap, base_name, None, false, 0, encoding)
+                (metrics, cmap, base_name, None, false, 0, encoding, None)
             }
         } else {
             // Font not found in page resources — use defaults
@@ -652,6 +658,7 @@ fn load_font_if_needed(
                 false,
                 0,
                 None,
+                None,
             )
         };
 
@@ -665,6 +672,7 @@ fn load_font_if_needed(
             is_cid_font,
             writing_mode,
             encoding,
+            encoding_name,
         },
     );
 }
@@ -810,7 +818,17 @@ fn handle_tj(
     let cached = font_cache.get(&tstate.font_name);
     let width_fn = get_width_fn(cached);
     let is_cid = cached.is_some_and(|c| c.is_cid_font);
-    let raw_chars = if is_cid {
+    // Check for predefined CJK CMap (e.g., GBK-EUC-H) — decode bytes via encoding_rs
+    let cjk_encoding_name: Option<&str> = cached.and_then(|c| {
+        if !c.is_cid_font { return None; }
+        c.encoding_name.as_deref().and_then(|name| {
+            if cjk_cmap_encoding(name).is_some() { Some(name) } else { None }
+        })
+    });
+    // ponytail: width lookup falls back to default_width since /W is CID-keyed
+    let raw_chars = if let Some(enc_name) = cjk_encoding_name {
+        show_string_predefined_cjk(tstate, string_bytes, &*width_fn, enc_name)
+    } else if is_cid {
         show_string_cid(tstate, string_bytes, &*width_fn)
     } else {
         show_string(tstate, string_bytes, &*width_fn)
@@ -845,7 +863,15 @@ fn handle_tj_array(
     let cached = font_cache.get(&tstate.font_name);
     let width_fn = get_width_fn(cached);
     let is_cid = cached.is_some_and(|c| c.is_cid_font);
-    let raw_chars = show_string_with_positioning_mode(tstate, &elements, &*width_fn, is_cid);
+    let cjk_encoding_name: Option<&str> = cached.and_then(|c| {
+        if !c.is_cid_font { return None; }
+        c.encoding_name.as_deref().and_then(|name| {
+            if cjk_cmap_encoding(name).is_some() { Some(name) } else { None }
+        })
+    });
+    let raw_chars = show_string_with_positioning_mode(
+        tstate, &elements, &*width_fn, is_cid, cjk_encoding_name,
+    );
 
     emit_char_events(raw_chars, tstate, gstate, handler, cached);
 }

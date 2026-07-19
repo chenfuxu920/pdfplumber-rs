@@ -327,7 +327,14 @@ impl PdfBackend for LopdfBackend {
             0, // page-level depth
             &mut gstate,
             &mut tstate,
-        )
+        )?;
+
+        // Process annotation shapes: Square/FreeText annotations represent
+        // visual borders that PDF viewers render automatically. Add synthetic
+        // path events so pdfplumber extracts them as Rect shapes.
+        process_annotation_rects(inner, page_dict, resources, handler, options)?;
+
+        Ok(())
     }
 
     fn extract_image_content(
@@ -984,7 +991,11 @@ fn fix_references_in_object(
 
 /// Get the content stream bytes from a page dictionary.
 ///
-/// Handles both single stream references and arrays of stream references.
+/// Handles three /Contents shapes permitted by ISO 32000-1 §7.8.2:
+///   - `stream` (direct or indirect reference → Stream)
+///   - `[stream ...]` (array of stream references)
+///   - indirect reference that resolves to an array (e.g. `gp-template` 全电发票
+///     writes `/Contents 28 0 R` where obj 28 is `[29 0 R]`)
 fn get_page_content_bytes(
     doc: &lopdf::Document,
     page_dict: &lopdf::Dictionary,
@@ -999,34 +1010,64 @@ fn get_page_content_bytes(
             let obj = doc
                 .get_object(*id)
                 .map_err(|e| BackendError::Parse(format!("failed to resolve /Contents: {e}")))?;
-            let stream = obj
-                .as_stream()
-                .map_err(|e| BackendError::Parse(format!("/Contents is not a stream: {e}")))?;
-            decode_content_stream(stream)
-        }
-        lopdf::Object::Array(arr) => {
-            let mut content = Vec::new();
-            for item in arr {
-                let id = item.as_reference().map_err(|e| {
-                    BackendError::Parse(format!("/Contents array item is not a reference: {e}"))
-                })?;
-                let obj = doc.get_object(id).map_err(|e| {
-                    BackendError::Parse(format!("failed to resolve /Contents stream: {e}"))
-                })?;
-                let stream = obj.as_stream().map_err(|e| {
-                    BackendError::Parse(format!("/Contents array item is not a stream: {e}"))
-                })?;
-                let bytes = decode_content_stream(stream)?;
-                if !content.is_empty() {
-                    content.push(b' ');
-                }
-                content.extend_from_slice(&bytes);
+            // ponytail: resolve once — handles the gp-template `[ref]`-via-indirect
+            // pattern. Reference-to-reference chains are not followed (no real PDF
+            // triggers it); if one shows up, add a depth-limited loop here.
+            match obj {
+                lopdf::Object::Stream(stream) => decode_content_stream(stream),
+                lopdf::Object::Array(arr) => decode_contents_array(doc, arr),
+                other => Err(BackendError::Parse(format!(
+                    "/Contents reference resolved to {} (expected Stream or Array)",
+                    obj_name(other)
+                ))),
             }
-            Ok(content)
         }
-        _ => Err(BackendError::Parse(
-            "/Contents is not a reference or array".to_string(),
-        )),
+        lopdf::Object::Array(arr) => decode_contents_array(doc, arr),
+        other => Err(BackendError::Parse(format!(
+            "/Contents is not a reference or array (got {})",
+            obj_name(other)
+        ))),
+    }
+}
+
+/// Concatenate the bytes of every stream referenced by a `/Contents` array.
+fn decode_contents_array(
+    doc: &lopdf::Document,
+    arr: &[lopdf::Object],
+) -> Result<Vec<u8>, BackendError> {
+    let mut content = Vec::new();
+    for item in arr {
+        let id = item.as_reference().map_err(|e| {
+            BackendError::Parse(format!("/Contents array item is not a reference: {e}"))
+        })?;
+        let obj = doc.get_object(id).map_err(|e| {
+            BackendError::Parse(format!("failed to resolve /Contents stream: {e}"))
+        })?;
+        let stream = obj
+            .as_stream()
+            .map_err(|e| BackendError::Parse(format!("/Contents array item is not a stream: {e}")))?;
+        let bytes = decode_content_stream(stream)?;
+        if !content.is_empty() {
+            content.push(b' ');
+        }
+        content.extend_from_slice(&bytes);
+    }
+    Ok(content)
+}
+
+/// Short tag name for an `Object` variant, used in error messages.
+fn obj_name(obj: &lopdf::Object) -> &'static str {
+    match obj {
+        lopdf::Object::Null => "Null",
+        lopdf::Object::Boolean(_) => "Boolean",
+        lopdf::Object::Integer(_) => "Integer",
+        lopdf::Object::Real(_) => "Real",
+        lopdf::Object::Name(_) => "Name",
+        lopdf::Object::String(_, _) => "String",
+        lopdf::Object::Array(_) => "Array",
+        lopdf::Object::Dictionary(_) => "Dictionary",
+        lopdf::Object::Stream(_) => "Stream",
+        lopdf::Object::Reference(_) => "Reference",
     }
 }
 
@@ -2420,6 +2461,94 @@ fn extract_string_entry(
         lopdf::Object::Name(name) => Some(String::from_utf8_lossy(name).into_owned()),
         _ => None,
     }
+}
+
+/// Convert Square/FreeText annotations to synthetic path events.
+///
+/// PDF annotations like Square and FreeText represent visual borders that
+/// PDF viewers render automatically from the Rect property. The AP stream
+/// is often empty or contains only styling. This function emits synthetic
+/// path events so pdfplumber extracts these as Rect shapes.
+fn process_annotation_rects(
+    doc: &lopdf::Document,
+    page_dict: &lopdf::Dictionary,
+    _resources: &lopdf::Dictionary,
+    handler: &mut dyn ContentHandler,
+    _options: &ExtractOptions,
+) -> Result<(), BackendError> {
+    use crate::handler::PaintOp;
+    use pdfplumber_core::{PathSegment, Point};
+
+    let annots_obj = match page_dict.get(b"Annots") {
+        Ok(obj) => resolve_object(doc, obj),
+        Err(_) => return Ok(()),
+    };
+    let annots = match annots_obj.as_array() {
+        Ok(arr) => arr,
+        Err(_) => return Ok(()),
+    };
+
+    for annot_entry in annots {
+        let annot_obj = resolve_object(doc, annot_entry);
+        let annot_dict = match annot_obj.as_dict() {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+
+        let subtype = annot_dict.get(b"Subtype").ok()
+            .and_then(|s| resolve_object(doc, s).as_name_str().ok())
+            .unwrap_or("");
+
+        if subtype != "Square" && subtype != "FreeText" {
+            continue;
+        }
+
+        let rect = match annot_dict.get(b"Rect") {
+            Ok(r_obj) => {
+                let r = resolve_object(doc, r_obj);
+                match r.as_array() {
+                    Ok(arr) if arr.len() >= 4 => {
+                        let vals: Option<Vec<f64>> = arr.iter()
+                            .map(|o| object_to_f64(o).ok()).collect();
+                        match vals {
+                            Some(v) => [v[0], v[1], v[2], v[3]],
+                            None => continue,
+                        }
+                    }
+                    _ => continue,
+                }
+            }
+            Err(_) => continue,
+        };
+
+        // Emit a rectangle path matching the annotation Rect.
+        // Coordinates are in PDF bottom-left origin; the y-flip to
+        // pdfplumber's top-left system is handled by extract_shapes.
+        let x = rect[0];
+        let y = rect[1];
+        let w = rect[2] - rect[0];
+        let h = rect[3] - rect[1];
+
+        let segments = vec![
+            PathSegment::MoveTo(Point::new(x, y)),
+            PathSegment::LineTo(Point::new(x + w, y)),
+            PathSegment::LineTo(Point::new(x + w, y + h)),
+            PathSegment::LineTo(Point::new(x, y + h)),
+            PathSegment::ClosePath,
+        ];
+
+        handler.on_path_painted(crate::handler::PathEvent {
+            segments,
+            paint_op: PaintOp::Stroke,
+            line_width: 1.0,
+            stroking_color: Some(pdfplumber_core::Color::Rgb(0.0, 0.0, 0.0)),
+            non_stroking_color: None,
+            ctm: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            dash_pattern: None,
+            fill_rule: None,
+        });
+    }
+    Ok(())
 }
 
 /// Resolve a potentially indirect object reference.
