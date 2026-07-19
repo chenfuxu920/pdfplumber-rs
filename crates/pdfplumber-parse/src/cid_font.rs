@@ -158,8 +158,31 @@ impl CidFontMetrics {
     }
 
     /// Get the width for a CID in glyph space (1/1000 of text space).
+    ///
+    /// For CJK CID fonts (GBK-EUC-H/Identity-H), /W is indexed by Adobe CID, but the
+    /// interpreter passes Unicode codepoints (after encoding_rs decoding for predefined
+    /// CMaps, or 2-byte CID == Unicode for Identity-H). When /W only covers CJK CIDs
+    /// (typical for Chinese invoices), ASCII codepoints (0x20-0x7E) miss and fall back
+    /// to /DW (default 1000 = full em), making ASCII chars 2× too wide.
+    ///
+    /// ASCII glyphs in CJK fonts are half-width (~0.5 em) — this matches SimSun/SimHei/
+    /// DengXian and the common CJK-Latin subset ratio. Apply 0.5× to the ASCII range
+    /// when /W misses. CJK codepoints keep /DW (correct by coincidence: full em = CJK width).
+    ///
+    /// Real fix would use the embedded TTF's hmtx table, but most CJK PDFs don't embed
+    /// the font (only the DengXian in this train ticket does), and 0.5× matches all
+    /// observed CJK fonts for 0x20-0x7E. Add hmtx fallback if a PDF breaks this assumption.
     pub fn get_width(&self, cid: u32) -> f64 {
-        self.widths.get(&cid).copied().unwrap_or(self.default_width)
+        if let Some(&w) = self.widths.get(&cid) {
+            return w;
+        }
+        // ponytail: ASCII range 0.5× /DW — CJK CID fonts have half-width Latin glyphs.
+        // /W is CID-keyed but we look up by Unicode codepoint (after encoding_rs decode),
+        // so ASCII always misses → /DW=1000 would make Latin 2× too wide.
+        if (0x20..=0x7E).contains(&cid) {
+            return self.default_width * 0.5;
+        }
+        self.default_width
     }
 
     /// Font ascent in glyph space units.
