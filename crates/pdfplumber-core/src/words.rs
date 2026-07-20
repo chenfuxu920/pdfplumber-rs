@@ -121,10 +121,71 @@ impl WordExtractor {
             TextDirection::Ttb | TextDirection::Btt
         );
 
+        // Partition sorted chars by non_stroking_color, preserving sorted order
+        // within each group. Chinese invoice PDFs overlay brown form-label text
+        // (e.g. "名称:") on top of black filled-in values at the same coordinates.
+        // Without color grouping, the interleaved chars from different layers
+        // fragment each other's words — brown spaces split the black value, and
+        // the brown "称:" splits the black "道交". Grouping by color first lets
+        // each text layer extract as continuous words.
+        let mut color_keys: Vec<Option<Color>> = Vec::new();
+        let mut color_groups: Vec<Vec<&Char>> = Vec::new();
+        for &ch in &sorted_chars {
+            let color = ch.non_stroking_color.clone();
+            if let Some(idx) = color_keys.iter().position(|c| *c == color) {
+                color_groups[idx].push(ch);
+            } else {
+                color_keys.push(color);
+                color_groups.push(vec![ch]);
+            }
+        }
+
+        let mut words = Vec::new();
+        for group_chars in &color_groups {
+            words.extend(Self::extract_single_color(group_chars, options, is_vertical));
+        }
+
+        // Restore reading order across color groups (each group was processed in
+        // sorted order, but groups themselves were collected in first-appearance order)
+        if !options.use_text_flow {
+            match options.text_direction {
+                TextDirection::Ttb => {
+                    words.sort_by(|a, b| {
+                        b.bbox.x0.partial_cmp(&a.bbox.x0).unwrap()
+                            .then(a.bbox.top.partial_cmp(&b.bbox.top).unwrap())
+                    });
+                }
+                TextDirection::Btt => {
+                    words.sort_by(|a, b| {
+                        b.bbox.x0.partial_cmp(&a.bbox.x0).unwrap()
+                            .then(b.bbox.bottom.partial_cmp(&a.bbox.bottom).unwrap())
+                    });
+                }
+                _ => {
+                    words.sort_by(|a, b| {
+                        a.bbox.top.partial_cmp(&b.bbox.top).unwrap()
+                            .then(a.bbox.x0.partial_cmp(&b.bbox.x0).unwrap())
+                    });
+                }
+            }
+        }
+
+        words
+    }
+
+    /// Extract words from a single-color group of chars.
+    ///
+    /// This is the core word-grouping loop, operating on chars that all share
+    /// the same `non_stroking_color`. Called once per color group by [`extract`].
+    fn extract_single_color(
+        chars: &[&Char],
+        options: &WordOptions,
+        is_vertical: bool,
+    ) -> Vec<Word> {
         let mut words = Vec::new();
         let mut current_chars: Vec<Char> = Vec::new();
 
-        for &ch in &sorted_chars {
+        for &ch in chars {
             let is_blank = ch.text.chars().all(|c| c.is_whitespace());
 
             // If this is a blank and we're not keeping blanks, finish current word
@@ -190,12 +251,19 @@ impl WordExtractor {
     /// Uses `abs(x_gap)` to also split on large backward jumps (negative gap),
     /// matching Python pdfplumber behavior. This prevents chars on opposite
     /// sides of a page from being grouped when they share a similar y-position.
+    ///
+    /// Splits chars with different fill colors: Chinese invoice PDFs overlay brown
+    /// form-label text (e.g. "名称:") on top of black filled-in values at the same
+    /// coordinates. Without a color split, word grouping mixes the brown "称:" into
+    /// the black "道交" value, producing garbled words like "轨称:道交".
     fn should_split_horizontal(last: &Char, current: &Char, options: &WordOptions) -> bool {
         let x_gap = (current.bbox.x0 - last.bbox.x1).abs();
         let y_diff = (current.bbox.top - last.bbox.top).abs();
         let x_tol = Self::effective_x_tolerance(last, current, options.x_tolerance);
         // ponytail: >= 语义匹配 Python pdfplumber（PR#243 cherry-pick）
-        x_gap >= x_tol || y_diff >= options.y_tolerance
+        // ponytail: 颜色分拆——表单标签(棕色)与填充值(黑色)坐标重叠时不合并
+        let different_color = last.non_stroking_color != current.non_stroking_color;
+        x_gap >= x_tol || y_diff >= options.y_tolerance || different_color
     }
 
     /// Check if two vertically-adjacent chars should be split into separate words.
@@ -207,7 +275,9 @@ impl WordExtractor {
         let x_diff = (current.bbox.x0 - last.bbox.x0).abs();
         let y_tol = Self::effective_y_tolerance(last, current, options.y_tolerance);
         // ponytail: >= 语义匹配 Python pdfplumber（PR#243 cherry-pick）
-        y_gap >= y_tol || x_diff >= options.x_tolerance
+        // ponytail: 颜色分拆——表单标签(棕色)与填充值(黑色)坐标重叠时不合并
+        let different_color = last.non_stroking_color != current.non_stroking_color;
+        y_gap >= y_tol || x_diff >= options.x_tolerance || different_color
     }
 
     fn make_word(chars: &[Char]) -> Word {
@@ -810,5 +880,141 @@ mod tests {
         assert_eq!(words.len(), 2);
         assert_eq!(words[0].text, "中");
         assert_eq!(words[1].text, "国");
+    }
+
+    // --- Color-grouped extraction tests (invoice label/value overlap) ---
+
+    /// Helper: create a CJK char with a specific non-stroking (fill) color.
+    fn make_colored_cjk_char(text: &str, x0: f64, top: f64, color: Color) -> Char {
+        Char {
+            text: text.to_string(),
+            bbox: BBox::new(x0, top, x0 + 9.0, top + 9.0),
+            fontname: "STSong-Light".to_string(),
+            size: 9.0,
+            doctop: top,
+            upright: true,
+            direction: TextDirection::Ltr,
+            stroking_color: None,
+            non_stroking_color: Some(color),
+            ctm: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            char_code: 0,
+            mcid: None,
+            tag: None,
+            render_mode: 0,
+            text_object_index: 0,
+        }
+    }
+
+    /// Helper: create a space char with a specific color.
+    fn make_colored_space(x0: f64, top: f64, color: Color) -> Char {
+        Char {
+            text: " ".to_string(),
+            bbox: BBox::new(x0, top, x0 + 4.5, top + 9.0),
+            fontname: "STSong-Light".to_string(),
+            size: 9.0,
+            doctop: top,
+            upright: true,
+            direction: TextDirection::Ltr,
+            stroking_color: None,
+            non_stroking_color: Some(color),
+            ctm: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            char_code: 32,
+            mcid: None,
+            tag: None,
+            render_mode: 0,
+            text_object_index: 0,
+        }
+    }
+
+    #[test]
+    fn test_color_grouping_separates_overlapping_label_and_value() {
+        // Simulates a Chinese VAT invoice seller line where:
+        // - Black value "长沙市轨道交通运营有限公司" at x=98-215 (drawn first)
+        // - Brown label "名" at x=38.50, then 19 brown spaces, then "称:" at x=133
+        // The brown "称:" at x=133 overlaps with black "道" at x=134.
+        // Without color grouping, word grouping mixes them into "称道".
+        let black = Color::Rgb(0.0, 0.0, 0.0);
+        let brown = Color::Rgb(0.61176, 0.32157, 0.13725);
+        let y = 299.25;
+
+        let chars = vec![
+            // Black value (drawn first in content stream, but sorted by x0)
+            make_colored_cjk_char("长", 98.0, y, black.clone()),
+            make_colored_cjk_char("沙", 107.0, y, black.clone()),
+            make_colored_cjk_char("市", 116.0, y, black.clone()),
+            make_colored_cjk_char("轨", 125.0, y, black.clone()),
+            make_colored_cjk_char("道", 134.0, y, black.clone()),
+            make_colored_cjk_char("交", 143.0, y, black.clone()),
+            make_colored_cjk_char("通", 152.0, y, black.clone()),
+            // Brown label
+            make_colored_cjk_char("名", 38.50, y, brown.clone()),
+            make_colored_space(47.50, y, brown.clone()),
+            make_colored_space(52.00, y, brown.clone()),
+            // ... (truncated spaces for brevity)
+            make_colored_space(97.00, y, brown.clone()),   // overlaps with 长@98
+            make_colored_space(101.50, y, brown.clone()),  // overlaps with 沙@107
+            make_colored_space(106.00, y, brown.clone()),  // overlaps with 沙@107
+            make_colored_cjk_char("称", 133.0, y, brown.clone()), // overlaps with 道@134
+        ];
+
+        let words = WordExtractor::extract(&chars, &WordOptions::default());
+
+        // The black value should be ONE continuous word: "长沙市轨道交通道交通"
+        // (brown spaces and brown "称" should NOT fragment it)
+        let black_words: Vec<&Word> = words.iter().filter(|w| {
+            w.chars.first().and_then(|c| c.non_stroking_color.as_ref()) == Some(&black)
+        }).collect();
+        let black_text: String = black_words.iter().map(|w| w.text.as_str()).collect();
+        assert!(
+            black_text.contains("长沙市轨") && black_text.contains("道交"),
+            "black value should be continuous, got: \"{}\" (words: {:?})",
+            black_text,
+            black_words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>()
+        );
+
+        // The brown "称" should NOT be mixed with black "道" in the same word
+        let has_cheng_dao_mix = words.iter().any(|w| w.text.contains("称道"));
+        assert!(
+            !has_cheng_dao_mix,
+            "brown '称' and black '道' should not be in the same word, got: {:?}",
+            words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>()
+        );
+
+        // Brown label chars should be separate from black value
+        let brown_words: Vec<&Word> = words.iter().filter(|w| {
+            w.chars.first().and_then(|c| c.non_stroking_color.as_ref()) == Some(&brown)
+        }).collect();
+        let brown_text: String = brown_words.iter().map(|w| w.text.as_str()).collect();
+        assert!(
+            brown_text.contains("名") && brown_text.contains("称"),
+            "brown label should contain '名' and '称', got: \"{}\"",
+            brown_text
+        );
+    }
+
+    #[test]
+    fn test_color_grouping_preserves_same_color_grouping() {
+        // Same-color chars should still group normally (no regression)
+        let black = Color::Rgb(0.0, 0.0, 0.0);
+        let chars = vec![
+            make_colored_cjk_char("中", 10.0, 100.0, black.clone()),
+            make_colored_cjk_char("国", 23.0, 100.0, black.clone()),
+            make_colored_cjk_char("人", 36.0, 100.0, black.clone()),
+        ];
+        let words = WordExtractor::extract(&chars, &WordOptions::default());
+        assert_eq!(words.len(), 1, "same-color CJK chars should group into one word");
+        assert_eq!(words[0].text, "中国人");
+    }
+
+    #[test]
+    fn test_color_grouping_none_color_groups_together() {
+        // Chars with non_stroking_color=None should group together (backwards compat)
+        let chars = vec![
+            make_cjk_char("中", 10.0, 100.0, 12.0, 12.0),
+            make_cjk_char("国", 23.0, 100.0, 12.0, 12.0),
+        ];
+        let words = WordExtractor::extract(&chars, &WordOptions::default());
+        assert_eq!(words.len(), 1);
+        assert_eq!(words[0].text, "中国");
     }
 }
