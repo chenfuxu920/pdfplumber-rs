@@ -1282,7 +1282,13 @@ fn emit_char_events(
                 // 3. Try CJK encoding (for CID fonts with predefined CMaps like GBK-EUC-H, EUC-H, H)
                 cached.and_then(|c| {
                     c.cjk_encoding.map(|enc| {
-                        let bytes = if rc.char_code > 0xFF {
+                        // UTF-16BE (Uni*-UCS2/UTF16 CMaps): every code point is
+                        // exactly 2 bytes, including ASCII (0x0020 space → 00 20).
+                        // The >0xFF heuristic would send ASCII through the
+                        // 1-byte branch, where UTF-16BE decoding yields U+FFFD.
+                        let bytes = if enc == encoding_rs::UTF_16BE {
+                            vec![(rc.char_code >> 8) as u8, (rc.char_code & 0xFF) as u8]
+                        } else if rc.char_code > 0xFF {
                             vec![(rc.char_code >> 8) as u8, (rc.char_code & 0xFF) as u8]
                         } else {
                             vec![rc.char_code as u8]
