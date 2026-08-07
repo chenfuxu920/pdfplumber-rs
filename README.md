@@ -21,6 +21,31 @@ Extract chars, words, lines, rects, and tables from PDF documents with precise c
 - **Optional serde** serialization for all data types
 - **Optional parallel** processing via rayon
 
+## Fork Modifications
+
+This fork is based on upstream
+[developer0hye/pdfplumber-rs](https://github.com/developer0hye/pdfplumber-rs),
+with the following enhancements focused on accurate extraction from CJK
+documents (invoices, forms, vertical text):
+
+- **CID width lookup** — maps Unicode characters to Adobe CIDs for the font
+  `/W` width array; ASCII characters fall back to `0.5 x /DW`.
+- **Char/Word metadata** — `Char`, `Word`, and `CharEvent` now expose
+  `color`, `render_mode`, and `text_object_index` (BT object sequence).
+- **Color-aware word grouping** — characters are partitioned by non-stroking
+  color before grouping, so overlaid text layers (e.g. brown form labels over
+  black values in Chinese invoices) extract as continuous words; splitting
+  matches Python pdfplumber's tolerance semantics (`>=` threshold, flat
+  tolerance).
+- **Indirect `/Contents`** — content streams that are indirect references to
+  arrays are resolved correctly.
+- **Annotations** — synthetic `Rect`s are derived from `Square` and `FreeText`
+  annotations.
+- **Table extraction** — bar-rect edge detection and per-row cell alignment
+  for CJK invoice-style grids.
+- **Shapes** — fill-path closure and near-axis-aligned approximate rect
+  bounding boxes.
+
 ## Installation
 
 Add to your `Cargo.toml`:
