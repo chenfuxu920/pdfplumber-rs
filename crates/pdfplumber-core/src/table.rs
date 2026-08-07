@@ -1534,13 +1534,10 @@ impl TableFinder {
             self.settings.intersection_y_tolerance,
         );
 
-        // Step 6: Build cells from intersections using edge coverage
-        let cells = edges_to_cells(
-            &intersections,
-            &edges,
-            self.settings.intersection_x_tolerance,
-            self.settings.intersection_y_tolerance,
-        );
+        // Step 6: Build cells from intersections (corner-based cell formation)
+        // intersections_to_cells 对角点成格，容忍缺失内部横线的中国发票
+        // （如 invoice10，content stream 未画 item 区行分隔线）；对应原 c2ab510 修复。
+        let cells = intersections_to_cells(&intersections);
 
         // Step 7: Group cells into tables
         cells_to_tables(cells)
@@ -1653,13 +1650,8 @@ impl TableFinder {
             self.settings.intersection_y_tolerance,
         );
 
-        // Step 6: Cells (using edge coverage)
-        let cells = edges_to_cells(
-            &intersections,
-            &edges,
-            self.settings.intersection_x_tolerance,
-            self.settings.intersection_y_tolerance,
-        );
+        // Step 6: Cells (corner-based, mirrors find_tables)
+        let cells = intersections_to_cells(&intersections);
 
         // Step 7: Tables
         let tables = cells_to_tables(cells.clone());
