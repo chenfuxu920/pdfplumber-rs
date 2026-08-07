@@ -32,12 +32,10 @@ pub fn encoding_for_cmap(cmap_name: &str) -> Option<&'static Encoding> {
     match base {
         // Chinese Simplified: GBK/GB2312 encoding
         // GBKp = packed GBK, GBK2K = GBK 2000, GBpc = GB packed
-        "GBK-EUC" | "GBKp-EUC" | "GBK2K" | "GBpc-EUC" | "GB-EUC" | "UniGB-UCS2" | "UniGB-UTF16" => {
-            Some(encoding_rs::GBK)
-        }
+        "GBK-EUC" | "GBKp-EUC" | "GBK2K" | "GBpc-EUC" | "GB-EUC" => Some(encoding_rs::GBK),
 
         // Chinese Traditional: Big5 encoding
-        "B5pc" | "ETen-B5" | "HKscs-B5" | "UniCNS-UCS2" | "UniCNS-UTF16" => Some(encoding_rs::BIG5),
+        "B5pc" | "ETen-B5" | "HKscs-B5" => Some(encoding_rs::BIG5),
 
         // Japanese: Shift-JIS encoding
         "90ms-RKSJ" | "90pv-RKSJ" | "83pv-RKSJ" | "78-RKSJ" | "Add-RKSJ" | "Ext-RKSJ" => {
@@ -53,7 +51,16 @@ pub fn encoding_for_cmap(cmap_name: &str) -> Option<&'static Encoding> {
         "H" | "V" => Some(encoding_rs::ISO_2022_JP),
 
         // Korean: EUC-KR encoding
-        "KSC-EUC" | "KSCms-UHC" | "UniKS-UCS2" | "UniKS-UTF16" => Some(encoding_rs::EUC_KR),
+        "KSC-EUC" | "KSCms-UHC" => Some(encoding_rs::EUC_KR),
+
+        // UTF-16 family: Uni* CMaps (UniGB-UCS2/UTF16, UniCNS-*, UniJIS-*, UniKS-*)
+        // These are Unicode CMaps: byte stream is UTF-16BE, NOT a legacy CJK
+        // encoding. Mapping them to GBK/BIG5/EUC_KR was a bug (upstream 0.2.0)
+        // that produced garbled text for e.g. STSong-Light-UniGB-UCS2-H fonts.
+        "UniGB-UCS2" | "UniGB-UTF16" | "UniCNS-UCS2" | "UniCNS-UTF16"
+        | "UniJIS-UCS2" | "UniJIS-UTF16" | "UniKS-UCS2" | "UniKS-UTF16" => {
+            Some(encoding_rs::UTF_16BE)
+        }
 
         // Identity or unknown — not a legacy CJK encoding
         _ => None,
@@ -122,6 +129,9 @@ fn is_lead_byte(byte: u8, encoding: &'static Encoding) -> bool {
     } else if encoding == encoding_rs::ISO_2022_JP {
         // Raw JIS X 0208 (H/V CMaps): lead byte range 0x21-0x7E
         (0x21..=0x7E).contains(&byte)
+    } else if encoding == encoding_rs::UTF_16BE {
+        // UTF-16BE (Uni*-UCS2/UTF16 CMaps): every character is exactly 2 bytes
+        true
     } else {
         false
     }
@@ -232,6 +242,23 @@ mod tests {
     }
 
     #[test]
+    fn unigb_ucs2_returns_utf16be() {
+        // UniGB-UCS2-H is a Unicode CMap (UTF-16BE bytes), NOT GBK.
+        // Regression: mapping it to GBK garbled STSong-Light-UniGB-UCS2-H fonts.
+        assert_eq!(encoding_for_cmap("UniGB-UCS2-H"), Some(encoding_rs::UTF_16BE));
+        assert_eq!(encoding_for_cmap("UniGB-UCS2-V"), Some(encoding_rs::UTF_16BE));
+        assert_eq!(encoding_for_cmap("UniGB-UTF16-H"), Some(encoding_rs::UTF_16BE));
+    }
+
+    #[test]
+    fn unicns_utf16_returns_utf16be() {
+        assert_eq!(encoding_for_cmap("UniCNS-UCS2-H"), Some(encoding_rs::UTF_16BE));
+        assert_eq!(encoding_for_cmap("UniCNS-UTF16-H"), Some(encoding_rs::UTF_16BE));
+        assert_eq!(encoding_for_cmap("UniJIS-UCS2-H"), Some(encoding_rs::UTF_16BE));
+        assert_eq!(encoding_for_cmap("UniKS-UCS2-H"), Some(encoding_rs::UTF_16BE));
+    }
+
+    #[test]
     fn unknown_returns_none() {
         assert_eq!(encoding_for_cmap("SomeCustomEncoding"), None);
     }
@@ -262,6 +289,29 @@ mod tests {
     }
 
     // ========== decode_cjk_string tests ==========
+
+    #[test]
+    fn decode_utf16be_chinese_chars() {
+        // "发票" = UTF-16BE 0x53D1 0x7968
+        let bytes = vec![0x53, 0xD1, 0x79, 0x68];
+        let decoded = decode_cjk_string(&bytes, encoding_rs::UTF_16BE);
+
+        assert_eq!(decoded.len(), 2);
+        assert_eq!(decoded[0].unicode, "发");
+        assert_eq!(decoded[0].char_code, 0x53D1);
+        assert_eq!(decoded[0].byte_len, 2);
+        assert_eq!(decoded[1].unicode, "票");
+        assert_eq!(decoded[1].char_code, 0x7968);
+        assert_eq!(decoded[1].byte_len, 2);
+    }
+
+    #[test]
+    fn utf16be_lead_byte_detection() {
+        // UTF-16BE: every byte starts a 2-byte pair
+        assert!(is_lead_byte(0x53, encoding_rs::UTF_16BE));
+        assert!(is_lead_byte(0x00, encoding_rs::UTF_16BE));
+        assert!(is_lead_byte(0xFF, encoding_rs::UTF_16BE));
+    }
 
     #[test]
     fn decode_gbk_chinese_chars() {
