@@ -57,6 +57,10 @@ pub struct Word {
     pub render_mode: u8,
     /// Text object index (from first character).
     pub text_object_index: u32,
+    /// Font descriptor /Flags bitmask (requires font metadata lookup, None if unavailable).
+    pub font_flags: Option<u32>,
+    /// Font descriptor /StemV (requires font metadata lookup, None if unavailable).
+    pub stem_v: Option<f64>,
 }
 
 /// Extracts words from a sequence of characters based on spatial proximity.
@@ -447,6 +451,9 @@ impl WordExtractor {
             non_stroking_color: chars[0].non_stroking_color.clone(),
             render_mode: chars[0].render_mode,
             text_object_index: chars[0].text_object_index,
+            // ponytail: font_flags/stem_v not accessible from chars alone, set None
+            font_flags: None,
+            stem_v: None,
         }
     }
 }
