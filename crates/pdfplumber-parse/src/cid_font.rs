@@ -180,8 +180,42 @@ impl CidFontMetrics {
     }
 
     /// Get the width for a CID in glyph space (1/1000 of text space).
+    ///
+    /// For CJK CID fonts (GBK-EUC-H/Identity-H), /W is indexed by Adobe CID, but the
+    /// interpreter passes Unicode codepoints (after encoding_rs decoding for predefined
+    /// CMaps, or 2-byte CID == Unicode for Identity-H). When /W only covers CJK CIDs
+    /// (typical for Chinese invoices), ASCII codepoints (0x20-0x7E) miss and fall back
+    /// to /DW (default 1000 = full em), making ASCII chars 2× too wide.
+    ///
+    /// ASCII glyphs in CJK fonts are half-width (~0.5 em) — this matches SimSun/SimHei/
+    /// DengXian and the common CJK-Latin subset ratio. Apply 0.5× to the ASCII range
+    /// when /W misses. CJK codepoints keep /DW (correct by coincidence: full em = CJK width).
+    ///
+    /// Real fix would use the embedded TTF's hmtx table, but most CJK PDFs don't embed
+    /// the font (only the DengXian in this train ticket does), and 0.5× matches all
+    /// observed CJK fonts for 0x20-0x7E. Add hmtx fallback if a PDF breaks this assumption.
+    ///
+    /// **Adobe CID mapping for predefined CJK CMaps**: When the Unicode codepoint misses
+    /// /W, try looking up by the Adobe CID. For Adobe-GB1/CNS1/Japan1/Korea1, ASCII
+    /// characters (U+0020-U+007E) map to CID 1-95 (CID = codepoint - 0x1F). This correctly
+    /// finds /W entries like space (CID 1 → 207) instead of falling back to 0.5×/DW (500).
     pub fn get_width(&self, cid: u32) -> f64 {
-        self.widths.get(&cid).copied().unwrap_or(self.default_width)
+        if let Some(&w) = self.widths.get(&cid) {
+            return w;
+        }
+        // Predefined CJK CMaps (UniGB-UCS2-H/GBK-EUC-H/etc.): the caller passes Unicode
+        // codepoints, but /W is indexed by Adobe CID. For ASCII range (U+0020-U+007E),
+        // Adobe-GB1/CNS1/Japan1/Korea1 all map to CID 1-95 (CID = codepoint - 0x1F).
+        // Try the Adobe CID before falling back to the 0.5× approximation.
+        if (0x20..=0x7E).contains(&cid) {
+            let adobe_cid = cid - 0x1F;
+            if let Some(&w) = self.widths.get(&adobe_cid) {
+                return w;
+            }
+            // Fallback: 0.5× /DW — CJK CID fonts have half-width Latin glyphs.
+            return self.default_width * 0.5;
+        }
+        self.default_width
     }
 
     /// Font ascent in glyph space units.

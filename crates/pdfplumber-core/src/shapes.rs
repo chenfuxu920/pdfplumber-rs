@@ -153,6 +153,36 @@ fn try_detect_rect(vertices: &[Point], page_height: f64) -> Option<(f64, f64, f6
     Some((x0, top, x1, bottom))
 }
 
+/// True if every edge is axis-aligned or nearly so (deviation < 1pt).
+///
+/// Invoice PDFs draw boxes as `m l l l f` with fill auto-closing the path,
+/// so vertices are often off-axis by a few tenths of a point. A genuinely
+/// rotated quad (both components large) is rejected.
+fn is_near_axis_aligned_quad(vertices: &[Point]) -> bool {
+    if vertices.len() != 4 {
+        return false;
+    }
+    (0..4).all(|i| {
+        let a = &vertices[i];
+        let b = &vertices[(i + 1) % 4];
+        let dx = (b.x - a.x).abs();
+        let dy = (b.y - a.y).abs();
+        dx <= AXIS_TOLERANCE || dy <= AXIS_TOLERANCE || dx.min(dy) < 1.0
+    })
+}
+
+/// Compute bounding box of vertices, converting from PDF bottom-left origin
+/// to pdfplumber top-left origin.
+fn bbox_of_vertices(vertices: &[Point], page_height: f64) -> (f64, f64, f64, f64) {
+    let xs: Vec<f64> = vertices.iter().map(|p| p.x).collect();
+    let ys: Vec<f64> = vertices.iter().map(|p| flip_y(p.y, page_height)).collect();
+    let x0 = xs.iter().cloned().fold(f64::INFINITY, f64::min);
+    let x1 = xs.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let top = ys.iter().cloned().fold(f64::INFINITY, f64::min);
+    let bottom = ys.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    (x0, top, x1, bottom)
+}
+
 /// Extract subpaths from a path's segments.
 ///
 /// Each subpath starts with a MoveTo and contains subsequent segments
@@ -270,11 +300,29 @@ pub fn extract_shapes(
             continue;
         }
 
-        let closed = is_closed(subpath, &vertices);
+        let closed = is_closed(subpath, &vertices) || painted.fill;
 
         // Try to detect rectangle from closed 4-vertex subpath
         if closed && vertices.len() == 4 {
             if let Some((x0, top, x1, bottom)) = try_detect_rect(&vertices, page_height) {
+                rects.push(Rect {
+                    x0,
+                    top,
+                    x1,
+                    bottom,
+                    line_width: painted.line_width,
+                    stroke: painted.stroke,
+                    fill: painted.fill,
+                    stroke_color: painted.stroke_color.clone(),
+                    fill_color: painted.fill_color.clone(),
+                });
+                continue;
+            }
+            // ponytail: fill 路径近似矩形（短斜边 < 1pt），用边界框作为 rect。
+            // PDF 发票常用 m+l+l+l+f 画框线，fill 自动闭合但顶点不严格轴对齐。
+            // 仅在 4 条边都接近轴对齐时接受，避免旋转四边形被 bbox 化。
+            if painted.fill && is_near_axis_aligned_quad(&vertices) {
+                let (x0, top, x1, bottom) = bbox_of_vertices(&vertices, page_height);
                 rects.push(Rect {
                     x0,
                     top,

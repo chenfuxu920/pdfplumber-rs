@@ -124,6 +124,8 @@ pub fn char_from_event(
         char_code: event.char_code,
         mcid: event.mcid,
         tag: event.tag.clone(),
+        render_mode: event.render_mode,
+        text_object_index: event.text_object_index,
     }
 }
 
@@ -157,6 +159,10 @@ mod tests {
             vertical_origin: (0.0, 0.0),
             mcid: None,
             tag: None,
+            non_stroking_color: None,
+            stroking_color: None,
+            render_mode: 0,
+            text_object_index: 0,
         }
     }
 

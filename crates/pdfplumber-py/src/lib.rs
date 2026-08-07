@@ -1025,6 +1025,8 @@ mod tests {
             char_code: 65,
             mcid: None,
             tag: None,
+            render_mode: 0,
+            text_object_index: 0,
         };
         Python::with_gil(|py| {
             let dict_obj = char_to_dict(py, &ch).expect("char_to_dict");
@@ -1067,6 +1069,11 @@ mod tests {
             doctop: 20.0,
             direction: ::pdfplumber::TextDirection::Ltr,
             chars: vec![],
+            fontname: "Helvetica".to_string(),
+            size: 12.0,
+            non_stroking_color: None,
+            render_mode: 0,
+            text_object_index: 0,
         };
         Python::with_gil(|py| {
             let dict_obj = word_to_dict(py, &word).expect("word_to_dict");

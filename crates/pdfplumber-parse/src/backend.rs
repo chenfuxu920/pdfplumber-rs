@@ -506,6 +506,10 @@ mod tests {
                 vertical_origin: (0.0, 0.0),
                 mcid: None,
                 tag: None,
+                non_stroking_color: None,
+                stroking_color: None,
+                render_mode: 0,
+                text_object_index: 0,
             });
 
             // Emit a sample path (horizontal line)

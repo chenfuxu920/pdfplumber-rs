@@ -59,6 +59,14 @@ pub struct CharEvent {
     pub mcid: Option<u32>,
     /// Structure tag name (e.g., "P", "Span", "H1") from BMC/BDC operator.
     pub tag: Option<String>,
+    /// Non-stroking (fill) color at the time of rendering.
+    pub non_stroking_color: Option<Color>,
+    /// Stroking (outline) color at the time of rendering.
+    pub stroking_color: Option<Color>,
+    /// Text rendering mode (Tr operator value 0-7).
+    pub render_mode: u8,
+    /// Sequential index of the BT text object containing this character (0-based).
+    pub text_object_index: u32,
 }
 
 /// Information about a painted path.
@@ -217,6 +225,10 @@ mod tests {
             vertical_origin: (0.0, 0.0),
             mcid: None,
             tag: None,
+            non_stroking_color: None,
+            stroking_color: None,
+            render_mode: 0,
+            text_object_index: 0,
         }
     }
 

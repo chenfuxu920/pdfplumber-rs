@@ -257,7 +257,10 @@ pub(crate) fn interpret_content_stream(
             }
 
             // --- Text state operators ---
-            "BT" => tstate.begin_text(),
+            "BT" => {
+                tstate.begin_text();
+                tstate.inc_text_object_index();
+            }
             "ET" => tstate.end_text(),
             "Tf" => {
                 if op.operands.len() >= 2 {
@@ -693,13 +696,12 @@ fn load_font_if_needed(
                 )
             } else {
                 if options.collect_warnings {
-                    handler.on_warning(
-                        ExtractWarning::with_operator_context(
-                            "CID font metrics not available, using defaults",
-                            op_index,
-                            font_name,
-                        )
-                        .set_code(ExtractWarningCode::MissingFont),
+                    handler.on_warning(ExtractWarning::with_operator_context(
+                        "CID font metrics not available, using defaults",
+                        op_index,
+                        font_name,
+                    )
+                    .set_code(ExtractWarningCode::MissingFont),
                     );
                 }
                 FontMetrics::default_metrics()
@@ -1409,6 +1411,8 @@ fn emit_char_events(
             (0.0, 0.0)
         };
 
+        let gs = gstate.graphics_state();
+
         handler.on_char(CharEvent {
             char_code: rc.char_code,
             unicode,
@@ -1426,6 +1430,10 @@ fn emit_char_events(
             vertical_origin,
             mcid: marked_content_stack.iter().rev().find_map(|mc| mc.mcid),
             tag: marked_content_stack.last().map(|mc| mc.tag.clone()),
+            non_stroking_color: Some(gs.fill_color.clone()),
+            stroking_color: Some(gs.stroke_color.clone()),
+            render_mode: tstate.render_mode as u8,
+            text_object_index: tstate.text_object_index(),
         });
     }
 }
