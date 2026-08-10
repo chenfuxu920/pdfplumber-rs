@@ -70,6 +70,8 @@ pub struct TableSettings {
     /// to all sub-cells. This normalizes merged/spanning cells so every row has the
     /// same number of columns. Default: false.
     pub duplicate_merged_content: bool,
+    /// When true, split wide/merged cells into the uniform grid defined by all cell boundaries (Python pdfplumber behavior). Default: true.
+    pub normalize_columns: bool,
 }
 
 impl Default for TableSettings {
@@ -94,6 +96,7 @@ impl Default for TableSettings {
             explicit_lines: None,
             min_accuracy: None,
             duplicate_merged_content: false,
+            normalize_columns: true,
         }
     }
 }

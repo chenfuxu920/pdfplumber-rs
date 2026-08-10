@@ -527,11 +527,15 @@ impl Page {
         }
 
         // Normalize merged cells: split wide cells into uniform grid columns,
-        // text in first sub-cell only (matching Python pdfplumber behavior)
-        tables = tables
-            .into_iter()
-            .map(|t| normalize_table_columns(&t))
-            .collect();
+        // text in first sub-cell only (matching Python pdfplumber behavior).
+        // Disable via settings.normalize_columns=false for layouts where rows
+        // lack vertical separators (e.g. Chinese invoice remark rows get split).
+        if settings.normalize_columns {
+            tables = tables
+                .into_iter()
+                .map(|t| normalize_table_columns(&t))
+                .collect();
+        }
 
         // Duplicate merged cell content if configured
         if settings.duplicate_merged_content {
